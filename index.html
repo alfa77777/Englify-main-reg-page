@@ -1844,12 +1844,34 @@ main,.hdr,.ftr-z{zoom:var(--z,1)}
   }
   $('#suCourseX').onclick = () => setCourse('');
   const mqPhone = matchMedia('(max-width: 820px)');
-  /* run fn once smooth scrolling has settled (or after 900 ms at most) */
-  function afterScroll(fn) {
-    let last = -1, still = 0, n = 0;
-    const tick = () => { const y = scrollY; still = Math.abs(y - last) < 1 ? still + 1 : 0; last = y; n++;
-      if (still >= 3 || n > 54) fn(); else requestAnimationFrame(tick); };
-    requestAnimationFrame(tick);
+  /* Long jumps: smooth-scrolling through the whole page is heavy on phones and can stall.
+     Jump instantly to ~700px before the target, glide the rest, and only call done() once the target
+     is really reached (or force it after 1.2 s). If the visitor touches/scrolls meanwhile, stop. */
+  function glideTo(getTop, done) {
+    const maxY = () => document.documentElement.scrollHeight - innerHeight;
+    const dest = () => Math.max(0, Math.min(getTop(), maxY()));
+    const LEAD = 700;
+    let t = dest();
+    if (reduce) { scrollTo({ top: t, behavior: 'instant' }); requestAnimationFrame(() => done && done()); return; }
+    if (Math.abs(t - scrollY) > LEAD) scrollTo({ top: t - Math.sign(t - scrollY) * LEAD, behavior: 'instant' });
+    let stopped = false, finished = false;
+    const stop = () => { stopped = true; };
+    addEventListener('touchstart', stop, { passive: true, once: true });
+    addEventListener('wheel', stop, { passive: true, once: true });
+    const finish = () => { if (finished) return; finished = true;
+      removeEventListener('touchstart', stop); removeEventListener('wheel', stop); if (!stopped && done) done(); };
+    requestAnimationFrame(() => {
+      t = dest(); scrollTo({ top: t, behavior: 'smooth' });
+      const t0 = performance.now();
+      const check = () => {
+        if (stopped) return finish();
+        const tt = dest();
+        if (Math.abs(scrollY - tt) < 2) return finish();
+        if (performance.now() - t0 > 1200) { scrollTo({ top: tt, behavior: 'instant' }); return requestAnimationFrame(finish); }
+        requestAnimationFrame(check);
+      };
+      requestAnimationFrame(check);
+    });
   }
   /* phone keyboard guard: when the keyboard opens (visual viewport shrinks) or a field gets focus,
      keep the focused field visible between the header and the keyboard */
@@ -1873,17 +1895,12 @@ main,.hdr,.ftr-z{zoom:var(--z,1)}
     if (a.dataset.course) setCourse(a.dataset.course);
     const dlgOpen = a.closest('dialog'); if (dlgOpen) dlgOpen.close();
     if (typeof closeMenu === 'function') closeMenu();
-    if (mqPhone.matches) {
-      /* phone: bring the form itself (not the section heading) right under the header,
-         so the name field stays above the on-screen keyboard once it opens */
-      const hdrB = $('.hdr').getBoundingClientRect().bottom;
-      const top = suForm.getBoundingClientRect().top + scrollY - hdrB - 12;
-      scrollTo({ top, behavior: reduce ? 'auto' : 'smooth' });
-      afterScroll(() => { if (suName) suName.focus({ preventScroll: true }); });
-    } else {
-      $('#royxat').scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
-      setTimeout(() => { if (suName) suName.focus({ preventScroll: true }); }, reduce ? 0 : 650);
-    }
+    /* phone: the form itself goes right under the header (keeps the name field above the keyboard);
+       desktop: the section heading */
+    const target = mqPhone.matches
+      ? () => suForm.getBoundingClientRect().top + scrollY - $('.hdr').getBoundingClientRect().bottom - 12
+      : () => $('#royxat').getBoundingClientRect().top + scrollY - parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop || 0);
+    glideTo(target, () => { if (suName) suName.focus({ preventScroll: true }); });
   });
   function fieldErr(id, msg) { const f = $(id); f.classList.toggle('err', !!msg); f.querySelector('.msg').textContent = msg || ''; }
   const esc = t => String(t).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
